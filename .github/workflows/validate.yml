@@ -1,0 +1,23 @@
+name: Validate pocket phone
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: node --test tests/*.test.mjs
+      - run: python tools/build_web_plugin.py src --output /tmp/pocket-phone.skivu.json
+      - run: python -c "from pathlib import Path; assert Path('/tmp/pocket-phone.skivu.json').read_bytes() == Path('packages/pocket-phone-1.2.0.skivu.json').read_bytes()"
