@@ -9,6 +9,8 @@ import {PocketPhoneConversation} from './conversation.js';
 import {collectionOptions,selectRecords,cartSummary,ledgerSummary as summarizeLedger} from './view-state.js';
 import {ScopedPocketPhoneStore} from './scoped-store.js';
 import {uiIcon,appColors} from './icons.js';
+import {RoleLife,lifeFeed} from './role-life.js';
+import {ExternalServices,RoleSoftwareTools,softwareConnections,externalUrl,feedStorageKey} from './external-services.js';
 
 const $=id=>document.getElementById(id);
 function el(tag,attrs={},...children){const node=document.createElement(tag);for(const [key,value]of Object.entries(attrs)){
@@ -22,7 +24,12 @@ let phoneScope='role';
 const phone=new ScopedPocketPhoneStore(new PocketPhoneStore({storage:{get:key=>host.storageGet(key),set:(key,value)=>host.storageSet(key,value)}}),{getMode:()=>phoneScope});
 const services=new PocketPhoneServices(host);
 const actions=new PocketPhoneActions({phone,host});
-const conversation=new PocketPhoneConversation({phone,host});
+const externalServices=new ExternalServices(host);
+const roleSoftwareTools=new RoleSoftwareTools({host,services:externalServices});
+const conversation=new PocketPhoneConversation({phone,host,externalTools:roleSoftwareTools});
+const roleLife=new RoleLife({phone,host});
+let hostMethods=[];
+let lifeFilter='all';
 const musicSources=new Map();
 phone.musicHandler=async(action,args)=>{const result=await services.music(action,args);if(action==='music_play'&&result.url&&result.track?.songId)musicSources.set(String(result.track.songId),result.url);return result;};
 let ctx={},moduleId=null,path=null,query='',limit=20,epoch=0,suspended=false,working=0;
@@ -83,7 +90,7 @@ async function mediaSource(reference){if(!reference)return null;if(cache.has(ref
 function picture(reference,cls='thumbnail'){const box=el('div',{class:`picture ${cls}`});if(!reference)return box;
   const captured=epoch;mediaSource(String(reference)).then(src=>{if(src&&captured===epoch&&box.isConnected){const img=el('img',{src,alt:'配图',loading:'lazy'});img.onerror=()=>img.remove();box.append(img);}}).catch(()=>{box.title=String(reference).startsWith('/api/media/')?'原版图片尚未迁入':'图片暂不可用';});return box;}
 function stopMedia(){if(audio){for(const name of ['onpause','onplay','onplaying','onseeked','onended','onloadedmetadata','onerror'])audio[name]=null;audio.pause();audio.removeAttribute('src');audio.load();audio=null;}audioTrack=null;if(audioUrl){URL.revokeObjectURL(audioUrl);blobUrls.delete(audioUrl);audioUrl=null;}}
-function stopContext(){epoch++;musicRequest++;actions.cancel();conversation.cancel();stopMedia();observedMusicState=null;conversationMessages=[];conversationDraft='';conversationStatus=null;allowPrivateConversation=false;for(const d of document.querySelectorAll('dialog'))d.close();for(const u of blobUrls)URL.revokeObjectURL(u);blobUrls.clear();cache.clear();musicSources.clear();}
+function stopContext(){epoch++;musicRequest++;actions.cancel();conversation.cancel();roleLife.cancel();stopMedia();observedMusicState=null;conversationMessages=[];conversationDraft='';conversationStatus=null;allowPrivateConversation=false;for(const d of document.querySelectorAll('dialog'))d.close();for(const u of blobUrls)URL.revokeObjectURL(u);blobUrls.clear();cache.clear();musicSources.clear();}
 async function chooseImage(){const c=capture(),file=await host.pickFile();if(!file)return null;check(c);return saveImage(file.bytes);}
 async function chooseAvatar(){const c=capture(),file=await host.pickFile();if(!file)return null;check(c);imageType(file.bytes);
   const url=blob(file.bytes,imageType(file.bytes)),image=new Image();image.src=url;await image.decode();check(c);
@@ -102,15 +109,15 @@ function chooseAlbum(accept){const c=capture(),d=dialog('从相册或本机图�
 }
 
 function render(){
-  $('phone').dataset.view=viewMode==='conversation'?'conversation':moduleId?'app':'home';
+  $('phone').dataset.view=viewMode==='conversation'?'conversation':moduleId||viewMode==='life'?'app':'home';
   if(!moduleId||viewMode==='conversation')delete $('screen').dataset.module;
-  $('owner').textContent=ctx.roleName?`${ctx.roleName}的小手机`:'角色小手机';$('role-label').textContent=viewMode==='conversation'?'真实角色对话 · 手机工具联动':phoneScope==='shared'?'共享机主 · 所有角色共用这部手机':'按角色保存 · 记录一份日常';$('back').hidden=!moduleId&&viewMode!=='conversation';
+  $('owner').textContent=ctx.roleName?`${ctx.roleName}的小手机`:'角色小手机';$('role-label').textContent=viewMode==='conversation'?'真实角色对话 · 手机工具联动':phoneScope==='shared'?'共享机主 · 所有角色共用这部手机':'按角色保存 · 记录一份日常';$('back').hidden=!moduleId&&viewMode==='phone';
   $('back').replaceChildren(uiIcon('arrowLeft'));$('settings').replaceChildren(uiIcon('settings'));
   $('role-task').disabled=!ctx.roleId;$('role-task').replaceChildren(uiIcon(actions.busy?'stop':'sparkle'));
   if(!ctx.roleId){$('screen').replaceChildren(el('div',{class:'empty'},el('h1',{text:'先选择一位角色'}),el('p',{text:'回到 Skivu 选择角色，再打开这部小手机。'})));return;}
   $('screen').classList.toggle('home-screen',!moduleId&&viewMode==='phone');$('screen').classList.toggle('conversation-screen',viewMode==='conversation');
   $('conversation').setAttribute('aria-label',viewMode==='conversation'?'打开小手机':'角色对话');$('conversation').replaceChildren(uiIcon(viewMode==='conversation'?'calendar':'wechat'));
-  if(viewMode==='conversation')renderConversation();else if(!moduleId)renderHome();else renderApp();
+  if(viewMode==='conversation')renderConversation();else if(viewMode==='life')renderLife();else if(!moduleId)renderHome();else renderApp();
 }
 function sunLabel(location){if(!location||!Number.isFinite(location.latitude)||!Number.isFinite(location.longitude))return['设置日出地点','离线计算日出与日落'];
   try{const times=globalThis.SunCalc.getTimes(new Date(),location.latitude,location.longitude);const options={hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:location.timezone||'Asia/Shanghai'};const format=new Intl.DateTimeFormat('zh-CN',options);
@@ -133,14 +140,15 @@ function renderHome(){const state=snapshot(),owner=state.owner||{},now=new Date(
   function select(index){homePage=index;track.style.transform=`translateX(-${index*100}%)`;for(const dot of dots.children)dot.setAttribute('aria-pressed',String(Number(dot.dataset.homeDot)===index));}
   let start=0;pages.onpointerdown=e=>{start=e.clientX;};pages.onpointerup=e=>{const delta=e.clientX-start;if(Math.abs(delta)>45)select(delta<0?1:0);};pages.append(track);select(homePage);
   const dock=el('nav',{class:'home-dock','aria-label':'常用应用'},icon('browser'),icon('wechat',true),icon('photos',true),icon('music'));
-  $('screen').replaceChildren(hero,widgets,el('div',{class:'home-apps-heading'},el('strong',{text:'我的应用'}),dots),pages,dock);
+  const recent=lifeFeed(state,{limit:1})[0],lifeEntry=button('',openLife,'life-entry');lifeEntry.dataset.openLife='true';lifeEntry.append(uiIcon('memos'),el('div',{},el('strong',{text:'TA 的近况'}),el('small',{text:recent?recent.title:'从便签、动态和安排，认识今天的 TA'})),uiIcon('arrowRight'));
+  $('screen').replaceChildren(hero,widgets,lifeEntry,el('div',{class:'home-apps-heading'},el('strong',{text:'我的应用'}),dots),pages,dock);
   $('screen').style.backgroundImage='';if(owner.wallpaper){const captured=epoch;mediaSource(owner.wallpaper).then(src=>{if(captured===epoch&&!moduleId&&viewMode==='phone')$('screen').style.backgroundImage=`linear-gradient(#f8f9fce0,#f8f9fcee),url("${src}")`;}).catch(()=>{});}
 }
 function openApp(id,collection){viewMode='phone';moduleId=id;const spec=phoneModules.find(m=>m.id===id);path=collection||spec.collections[0];query='';collectionFilter='all';limit=20;render();$('screen').scrollTop=0;}
 function renderApp(){const app=phoneModules.find(m=>m.id===moduleId),spec=phoneCollections[path];if(!app||!spec){moduleId=null;render();return;}
   $('screen').classList.remove('home-screen');$('screen').dataset.module=moduleId;
   $('screen').style.backgroundImage='';const colors=appColors[app.id],mark=el('span',{class:'app-mark',style:{background:colors[0],color:colors[1]}},uiIcon(app.id));const head=el('div',{class:'page-title'},mark,el('div',{class:'app-heading'},el('h1',{text:appNames[app.id]||app.title}),el('small',{text:appCaptions[app.id]||''})),
-    ...(app.id==='music'?[button('⌕',searchMusic,'icon')]:[]),button('+',()=>editRecord(spec),'icon'));
+    ...(softwareConnections.find(c=>c.id===app.id)?.mode!=='local'?[button('连接',()=>softwareConnection(app.id),'connection-button')]:[]),...(app.id==='music'?[button('⌕',searchMusic,'icon')]:[]),button('+',()=>editRecord(spec),'icon'));
   const tabs=el('nav',{class:'tabs','aria-label':'记录分类'},app.collections.map(key=>{const b=button(phoneCollections[key].title,()=>{path=key;query='';collectionFilter='all';limit=20;renderApp();});b.setAttribute('aria-pressed',String(key===path));return b;}));
   const search=el('input',{class:'app-search',type:'search',value:query,placeholder:'搜索这份记录','aria-label':'搜索记录',oninput:e=>{query=e.target.value;limit=20;fillRecords();}});
   const options=collectionOptions(path,rows(path)),filters=el('nav',{class:'record-filters','aria-label':'内容筛选'});
@@ -176,6 +184,7 @@ function detailField(key,value){if(value==null||value==='')return null;if(pictur
   return el('dl',{class:'detail-field'},el('dt',{text:labels[key]||key}),el('dd',{text}));}
 async function toggleFavorite(spec,row){const c=capture();await phone.invoke('upsert',{path:spec.key,record:{id:row.id,favorite:!row.favorite},expected_revision:snapshot().revision},{...c,mayCommit:()=>valid(c)});row.favorite=!row.favorite;return row.favorite;}
 function recordDetail(spec,row){const d=dialog(title(row));d.content.append(recordStory({moduleId:spec.module,row,state:snapshot(),el,picture,button,toggleFavorite:spec.fields.includes('favorite')?item=>job(()=>toggleFavorite(spec,item)):null}));
+  if(spec.module!=='pornhub')d.footer.append(button('聊聊这件事',()=>{d.close();askAboutRecord(spec.key,row);}));
   if(spec.fields.includes('progress')){const c=capture(),range=inputField(d.content,'reading-progress','阅读 / 收听进度',Number(row.progress||0),{type:'range',min:0,max:1,step:.01}),value=el('small',{text:`${Math.round(Number(row.progress||0)*100)}%`});range.oninput=()=>{value.textContent=`${Math.round(Number(range.value)*100)}%`;};d.content.append(value,button('保存进度',()=>job(async()=>{check(c);await phone.invoke('upsert',{path:spec.key,record:{id:row.id,progress:Number(range.value)},expected_revision:snapshot().revision},{...c,mayCommit:()=>valid(c)});toast('进度已保存');})));}
   if(spec.fields.includes('comments'))socialActions(d,spec,row);
   if(spec.key==='xianyu.items')d.content.append(button(row.favorite?'已收藏':'收藏这件好物',event=>job(async()=>{const favorite=await toggleFavorite(spec,row);event.target.textContent=favorite?'已收藏':'收藏这件好物';})));
@@ -261,7 +270,7 @@ function socialActions(d,spec,initial){const c=capture(),section=el('section',{c
 }
 
 function settings(){const d=dialog('小手机设置'),list=el('div',{class:'settings-buttons'});
-  for(const [label,fn]of [['机主与壁纸',profileEditor],['手机存储模式',scopeSettings],['连接网易云',()=>connection(false)],['配置生图服务',()=>connection(true)],['导出手机备份',exportBackup],['单独导出记录与图片',exportSeparate],['导入原版或 Skivu 存档',importBackup],['导入原版图片文件',importMedia],['恢复上一份备份',recover],['关于与来源',about]])list.append(button(label,()=>{d.close();fn();}));d.content.append(list);}
+  for(const [label,fn]of [['软件与服务连接',softwareCenter],['机主与壁纸',profileEditor],['手机存储模式',scopeSettings],['连接网易云',()=>connection(false)],['配置生图服务',()=>connection(true)],['导出手机备份',exportBackup],['单独导出记录与图片',exportSeparate],['导入原版或 Skivu 存档',importBackup],['导入原版图片文件',importMedia],['恢复上一份备份',recover],['关于与来源',about]])list.append(button(label,()=>{d.close();fn();}));d.content.append(list);}
 function scopeSettings(){const c=capture(),d=dialog('手机存储模式'),select=el('select',{name:'phone-scope'},el('option',{value:'role',text:'按角色分别保存',selected:phoneScope==='role'}),el('option',{value:'shared',text:'原版共享机主：所有角色共用一部手机',selected:phoneScope==='shared'})),copy=el('input',{type:'checkbox',name:'copy-phone',checked:false});
   d.content.append(select,el('p',{text:'切换模式会保留各空间已有记录，不会自动合并。共享机主模式下，所有角色看到并修改同一部手机。'}),el('label',{class:'check'},copy,'把当前手机复制到目标空间（覆盖目标手机）'));
   d.footer.append(button('取消',d.close),button('应用',()=>job(async()=>{check(c);const target=select.value;if(target===phoneScope){d.close();return;}const contents=copy.checked?phone.exportArchive(c.roleId):null;if(contents&&!await confirm('覆盖目标空间的手机？','当前手机会复制到目标空间，目标空间旧记录由事务备份保留；其他空间保持不变。'))return;check(c);await host.storageSet('pocket-phone.preferences.v1',{mode:target});const sameRole=ctx.roleId===c.roleId;stopContext();phoneScope=target;moduleId=null;render();if(contents&&sameRole){const next=capture();await phone.importArchive(next.roleId,contents,{mayCommit:()=>valid(next)});}toast(contents&&!sameRole?'存储模式已切换；角色已变化，未复制记录。':'存储模式已切换');}),'primary'));
@@ -315,7 +324,57 @@ async function importMedia(){const c=capture();await job(async()=>{const file=aw
     await phone.importArchive(c.roleId,JSON.stringify(replace(state)),{mayCommit:()=>{check(c);if(phone.snapshot(c.roleId).revision!==state.revision)throw new Error('手机已有新记录，本次未覆盖。请重新选择图片进行关联。');return true;}});toast('原版图片已关联');}
 });}
 async function recover(){if(await confirm('恢复上一份插件备份？','会恢复所有角色的小手机记录。建议先导出需要保留的最新记录。'))await job(async()=>{await phone.recoverBackup();problem(null);toast('已恢复上一份备份');});}
-function about(){const d=dialog('关于角色小手机');d.content.append(el('p',{text:'Skivu 独立插件 1.2.0。参考 TA 的小手机 1.5.2 的功能规格，界面、存档与 SDK 适配独立实现。'}),el('p',{text:'原作者：LilyWithZYoutfear。原包未声明整体代码复用许可，本包未搬入其界面与业务代码。晨昏使用保留 BSD-2-Clause 许可的 SunCalc 1.9.0。'}),el('p',{text:'手机记录保存在本插件空间，可选择按角色分开或共用一部手机。音乐、生图使用你提供的服务与凭据，实际外联均经宿主代理；不会读取 App 的模型密钥或账号令牌。'}));d.footer.append(button('关闭',d.close));}
+function about(){const d=dialog('关于角色小手机');d.content.append(el('p',{text:'Skivu 独立插件 1.3.0。参考 TA 的小手机 1.5.2 的功能规格，界面、存档与 SDK 适配独立实现。'}),el('p',{text:'原作者：LilyWithZYoutfear。原包未声明整体代码复用许可，本包未搬入其界面与业务代码。晨昏使用保留 BSD-2-Clause 许可的 SunCalc 1.9.0。'}),el('p',{text:'手机记录保存在本插件空间，可选择按角色分开或共用一部手机。音乐、生图使用你提供的服务与凭据，实际外联均经宿主代理；不会读取 App 的模型密钥或账号令牌。'}));d.footer.append(button('关闭',d.close));}
+
+function softwareCenter(){const d=dialog('软件与服务连接');d.content.append(el('p',{text:'这部手机属于当前角色。下面逐项列出可用连接：真实平台的数据、系统打开结果与角色本机记录分别展示。'}));
+  for(const item of softwareConnections){const b=button('',()=>{d.close();softwareConnection(item.id);},'software-item');b.append(uiIcon(item.id),el('div',{},el('strong',{text:appNames[item.id]}),el('small',{text:({local:'本机角色记录',external:'官方网页 · 账号未连接',music:'真实音乐 · 自选服务',books:'真实书目搜索',map:'真实地图网页',feed:'真实订阅读取'})[item.mode]})),uiIcon('arrowRight'));d.content.append(b);}d.footer.append(button('关闭',d.close));}
+async function openSoftwareLink(raw){const url=externalUrl(raw);if(!hostMethods.includes('ui.openExternal')){toast('软件跳转需要 Skivu 0.2.39 或更新版本，请先更新 App。');return;}const result=await host.openExternal(url);if(result.status==='accepted')toast('系统已接收打开请求');else if(result.status==='not_available')toast('系统没有可处理该链接的软件');else toast('已取消打开');}
+function softwareConnection(id){const item=softwareConnections.find(v=>v.id===id);if(!item)return;const c=capture(),d=dialog(`${appNames[id]} · 服务连接`);d.content.append(el('p',{class:'connection-detail',text:item.detail}));
+  if(item.mode==='music')d.content.append(button('配置或检查音乐服务',()=>{d.close();connection(false);},'primary'),button('搜索真实音乐',()=>{d.close();searchMusic();}));
+  if(item.mode==='map'){const query=inputField(d.content,'real-place','要查找的真实地点');d.content.append(button('在地图中搜索',()=>job(()=>openSoftwareLink('https://www.openstreetmap.org/search?'+new URLSearchParams({query:query.value})))));}
+  if(item.mode==='books'){const query=inputField(d.content,'real-book','书名或作者'),results=el('div',{class:'external-results'});d.content.append(button('搜索书籍',()=>job(async()=>{const items=await externalServices.books(query.value);check(c);if(!d.dialog.isConnected)return;results.replaceChildren();if(!items.length)results.append(el('p',{text:'没有找到匹配书目。'}));for(const book of items){const card=el('article',{class:'life-card'},el('h3',{text:book.title}),el('p',{text:[book.author,book.year].filter(Boolean).join(' · ')}),el('small',{text:'来源：Open Library'}));card.append(button('加入 TA 的书架',()=>job(async()=>{check(c);if(rows('books').some(row=>row.quotes?.includes('来源：'+book.url))){toast('这本书已经在 TA 的书架');return;}await phone.invoke('upsert',{path:'books',record:{title:book.title,author:book.author,quotes:['来源：'+book.url]}},{...c,mayCommit:()=>valid(c)});toast('已加入 TA 的书架');})),button('打开书目来源',()=>job(()=>openSoftwareLink(book.url))));results.append(card);}}),'primary'),results);}
+  if(item.mode==='feed'){
+    const source=inputField(d.content,'real-feed','RSS / Atom 订阅地址（公开 HTTPS）'),remember=el('input',{type:'checkbox',checked:true}),results=el('div',{class:'external-results'});d.content.append(el('label',{class:'check'},remember,'为当前角色记住这个订阅地址'));
+    const keyPromise=feedStorageKey(phone.scopeKey,c.roleId,id);
+    job(async()=>{const saved=await host.storageGet(await keyPromise);check(c);if(d.dialog.isConnected&&typeof saved==='string')source.value=saved;});
+    d.content.append(button('读取订阅',()=>job(async()=>{const feed=await externalServices.feed(source.value);check(c);if(!d.dialog.isConnected)return;if(remember.checked){await host.storageSet(await keyPromise,feed.source);check(c);}results.replaceChildren(el('small',{text:'来自 '+new URL(feed.source).hostname+' · 仅读取公开订阅，没有连接平台账号'}));if(!feed.items.length)results.append(el('p',{text:'订阅中没有可保存的公开条目。'}));for(const entry of feed.items){const card=el('article',{class:'life-card'},el('h3',{text:entry.title}),el('p',{text:entry.summary}),el('small',{text:entry.time}));card.append(button(id==='xiaoyuzhou'?'收进 TA 的播客':'收进 TA 的浏览器',()=>job(async()=>{check(c);const path=id==='xiaoyuzhou'?'xiaoyuzhou.episodes':'browser.tabs';if(rows(path).some(row=>row.url===entry.url)){toast('这条订阅已经保存');return;}await phone.invoke('upsert',{path,record:{title:entry.title,url:entry.url,...(id==='xiaoyuzhou'?{note:entry.summary}:{summary:entry.summary}),time:entry.time}},{...c,mayCommit:()=>valid(c)});toast('已收藏真实来源链接');})),button('打开来源',()=>job(()=>openSoftwareLink(entry.url))));results.append(card);}}),'primary'),results);
+  }
+  if(item.mode==='feed'&&id==='browser'){const target=inputField(d.content,'external-url','直接打开网页（公开 HTTPS）');d.content.append(button('在系统浏览器或关联软件打开',()=>job(()=>openSoftwareLink(target.value))));}
+  if(item.url)d.footer.append(button('打开官方网站',()=>job(()=>openSoftwareLink(item.url))));
+  d.footer.append(button('关闭',d.close));
+}
+
+function openLife(){viewMode='life';moduleId=null;lifeFilter='all';render();$('screen').scrollTop=0;}
+function renderLife(){
+  $('screen').style.backgroundImage='';const owner=snapshot().owner?.name||ctx.roleName||'TA',feed=lifeFeed(snapshot(),{filter:lifeFilter});
+  const head=el('div',{class:'page-title'},el('span',{class:'app-mark'},uiIcon('memos')),el('div',{class:'app-heading'},el('h1',{text:'TA 的近况'}),el('small',{text:`${owner}的生活，留在这部小手机里`}))),actions=el('div',{class:'life-actions'},button('让 TA 更新近况',draftRoleLife,'primary'),button('收下 TA 说过的话',collectRoleWords));
+  const filters=el('nav',{class:'record-filters','aria-label':'近况分类'},[['all','全部'],['plans','TA 的安排'],['likes','TA 的喜好']].map(([value,label])=>{const b=button(label,()=>{lifeFilter=value;renderLife();});b.setAttribute('aria-pressed',String(lifeFilter===value));return b;}));
+  const list=el('section',{class:'life-feed','aria-label':'角色生活记录'});
+  for(const entry of feed){const card=el('article',{class:'life-card','data-life-record':entry.key},el('div',{class:'life-meta'},el('span',{text:entry.label}),el('time',{text:entry.date.slice(0,16)})),el('h2',{text:ownerText(entry.title,snapshot())}),entry.image?picture(entry.image,'life-photo'):null,el('p',{text:ownerText(entry.body,snapshot())}),el('div',{class:'life-card-actions'},button('打开记录',()=>{openApp(phoneCollections[entry.path].module,entry.path);recordDetail(phoneCollections[entry.path],entry.record);}),button('问问 TA',()=>askAboutRecord(entry.path,entry.record))));list.append(card);}
+  if(!feed.length)list.append(el('div',{class:'empty'},el('h2',{text:'这里等着 TA 的第一段日常'}),el('p',{text:'让 TA 根据自己的设定写一份近况，预览后收进手机；也可以从真实角色聊天中保存 TA 说过的话。'})));
+  $('screen').replaceChildren(head,actions,filters,list);
+}
+function askAboutRecord(recordPath,row){
+  if(!ctx.chatId){toast('请先在 Skivu 选择一条已有的角色聊天。');return;}
+  const body=String(row.content||row.text||row.note||row.caption||row.artist||row.address||'').slice(0,1000);
+  conversationDraft=`我看到了你的小手机里「${phoneCollections[recordPath].title}」的一条记录：${title(row)}${body?'\n'+body:''}\n想听你讲讲这件事。`;
+  openConversation();
+}
+function draftRoleLife(){
+  const c=capture(),d=dialog(`让${ctx.roleName||'TA'}更新近况`),direction=inputField(d.content,'life-direction','这次想看看 TA 怎样的生活','写一些符合你自己习惯、喜好和经历的近况。',{multiline:true}),day=inputField(d.content,'life-date','角色生活的日期',date(),{type:'date'});
+  d.content.prepend(el('p',{text:'依据当前角色设定与已有手机记录生成便签、动态和安排。先预览和修改，确认后一起保存；生成不会操作外部软件。'}));
+  d.dialog.addEventListener('close',()=>roleLife.cancel(),{once:true});
+  const generate=button('生成近况草稿',()=>job(async()=>{generate.disabled=true;d.error.hidden=true;try{const draft=await roleLife.draft({roleId:c.roleId,caller:ctx.roleName||'',date:day.value,instruction:direction.value});check(c);if(!d.dialog.isConnected)return;
+    d.content.replaceChildren(el('p',{class:'life-draft-summary',text:draft.summary}));const fields=[];
+    for(const entry of draft.entries){const card=el('section',{class:'life-draft-card'}),include=el('input',{type:'checkbox',checked:true});card.append(el('label',{class:'check'},include,`${{memo:'备忘录',moment:'动态',event:'日程'}[entry.kind]} · 采用这条`));const title=inputField(card,'life-title','标题',entry.title),body=inputField(card,'life-body','内容',entry.body,{multiline:true}),dateField=inputField(card,'life-day','日期',entry.date,{type:'date'}),time=inputField(card,'life-time','时间（可留空）',entry.time,{type:'time'});fields.push({entry,include,title,body,dateField,time});d.content.append(card);}
+    const save=button('确认收进 TA 的手机',()=>job(async()=>{save.disabled=true;try{check(c);const entries=fields.filter(f=>f.include.checked).map(f=>({...f.entry,title:f.title.value,body:f.body.value,date:f.dateField.value,time:f.time.value}));const result=await roleLife.save(draft.id,entries);check(c);d.close();openLife();toast(`已收进 ${result.saved} 条近况`);}catch(e){d.fail(e);}finally{save.disabled=false;}}),'primary');d.footer.replaceChildren(button('放弃草稿',d.close),save);
+  }catch(e){d.fail(e);}finally{generate.disabled=false;}}),'primary');d.footer.append(button('取消',d.close),generate);
+}
+function collectRoleWords(){const c=capture(),d=dialog('收下 TA 说过的话');d.content.append(el('p',{text:'从当前 Skivu 会话读取角色原话。选择后可以编辑为便签，保存到 TA 的手机。'}));
+  job(async()=>{try{const context=await host.context();check(c);if(context.roleId!==c.roleId||context.chatId!==ctx.chatId)throw new Error('当前聊天已变化。');const messages=await host.chatRead({limit:50});check(c);const current=await host.context();check(c);if(current.roleId!==context.roleId||current.chatId!==context.chatId)throw new Error('当前聊天已变化。');if(!d.dialog.isConnected)return;const choices=messages.filter(m=>m.role==='assistant').reverse();
+    if(!choices.length)d.content.append(el('p',{text:'当前会话还没有角色说过的话。先和 TA 聊聊，再来保存。'}));
+    for(const message of choices){const b=button('',()=>{d.close();editRecord(phoneCollections.memos,{title:'TA 说过的话',content:message.text+`\n\n来源：与${ctx.roleName||'角色'}的对话`,time:date()});},'role-words');b.append(el('p',{text:message.text.slice(0,500)}),el('small',{text:'收成一条便签'}));d.content.append(b);}
+  }catch(e){d.fail(e);}});d.footer.append(button('关闭',d.close));}
 
 async function reloadConversation(){const c=capture();return job(async()=>{const messages=await conversation.history({limit:60});check(c);conversationMessages=messages;if(viewMode==='conversation')render();});}
 function openConversation(){if(!ctx.chatId){toast('请先在 Skivu 选择一条已有的角色聊天。');return;}viewMode='conversation';moduleId=null;render();reloadConversation();}
@@ -358,5 +417,5 @@ host.subscribeContext(async detail=>{const request=++contextRequest;const announ
   try{const next=await host.context();if(request!==contextRequest||suspended)return;const changed=next.roleId!==ctx.roleId||next.chatId!==ctx.chatId;if(changed){stopContext();moduleId=null;}ctx=next;render();if(viewMode==='conversation'&&ctx.chatId)reloadConversation();}catch{if(request===contextRequest&&!suspended)problem('角色上下文暂不可用，请重新打开小手机。');}});
 host.onSuspend(()=>{suspended=true;stopContext();});
 setInterval(()=>{if(viewMode==='phone'&&!moduleId&&!document.querySelector('dialog[open]')&&!suspended)render();},60000);
-try{await host.info();ctx=await host.context();const preferences=await host.storageGet('pocket-phone.preferences.v1');phoneScope=preferences?.mode==='shared'?'shared':'role';await phone.restore();try{await conversation.restore();}catch(e){conversationProblem=e.message||'对话任务日志暂不可用';toast('对话任务日志暂不可用，手机记录仍可使用。');}try{await services.restore();}catch{toast('音乐或生图连接暂未读入，可在设置中重新配置。');}render();if(ctx.action==='update-phone')roleTask();if(ctx.action==='chat-phone')openConversation();}
+try{const capabilities=await host.info();hostMethods=Array.isArray(capabilities.methods)?capabilities.methods:[];ctx=await host.context();const preferences=await host.storageGet('pocket-phone.preferences.v1');phoneScope=preferences?.mode==='shared'?'shared':'role';await phone.restore();try{await conversation.restore();}catch(e){conversationProblem=e.message||'对话任务日志暂不可用';toast('对话任务日志暂不可用，手机记录仍可使用。');}try{await services.restore();}catch{toast('音乐或生图连接暂未读入，可在设置中重新配置。');}render();if(ctx.action==='update-phone')roleTask();if(ctx.action==='chat-phone')openConversation();}
 catch(e){problem(e.message||'小手机存档暂不可用。');render();}

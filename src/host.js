@@ -112,6 +112,12 @@ export class PocketPhoneHost {
     }
   }
   async info() { return this._call('host.info'); }
+  async openExternal(url) {
+    text(url,8192,'外部链接');
+    const value=await this._call('ui.openExternal',{url});
+    if(!object(value)||!['accepted','cancelled','not_available'].includes(value.status))fail('宿主未返回有效的外部打开结果。','INVALID_RESPONSE');
+    return {status:value.status};
+  }
   async context() {
     const value = await this._call('context.get');
     if (!object(value)) fail('宿主上下文格式不正确。', 'INVALID_RESPONSE');

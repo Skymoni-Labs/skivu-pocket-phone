@@ -1,6 +1,6 @@
-# 角色小手机 1.2.0
+# 角色小手机 1.3.0
 
-独立的 Skivu SDK 1.0 插件，需要 **Skivu 0.2.38 或更新版本**。通过通用宿主运行，无需 Linux、Node 或额外服务进程。完整可编辑源码、许可证、测试与构建工具在本仓库公开提供。
+独立的 Skivu SDK 1.0 插件，需要 **Skivu 0.2.39 或更新版本**。通过通用宿主运行，无需 Linux、Node 或额外服务进程。完整可编辑源码、许可证、测试与构建工具在本仓库公开提供。
 
 在“插件市场 → 开放插件与开发者”刷新目录，找到“角色小手机”安装并确认权限；也可通过“导入插件”选择发行版 `.skivu.json`。插件提供独立入口、聊天面板，以及“打开角色小手机”“更新角色的小手机”“与角色聊天并使用小手机”三个动作。
 
@@ -10,6 +10,16 @@
 
 本仓库独立维护插件的源码、测试、发行包和版本；插件市场仓库只登记安装 URL、manifest、大小与摘要。
 
+## TA 的生活与软件连接
+
+手机机主是当前角色。桌面的“TA 的近况”汇集实际保存的便签、动态、照片、歌单、书架、地点和安排。“让 TA 更新近况”通过宿主当前角色设定生成1至5条相互呼应的草稿，预览、修改和勾选后原子保存到备忘录/动态/日程；不会自动修改旧记录或操作外部账号。切换角色、范围或会话时草稿作废，其他编辑发生后旧草稿不能覆盖。
+
+“问问 TA”将选中记录带入当前 Skivu 聊天的可编辑输入框，用户发送后使用现有多轮工具流程。“收下 TA 说过的话”读取当前宿主会话中的角色原话，编辑后保存为 TA 的便签。
+
+“软件与服务连接”逐项列出21个入口的实际能力：已有音乐服务、Open Library 书目查询、RSS/Atom读取及系统打开公开链接。查询结果在用户选择后保存，保留来源；相同书目/订阅条目避免重复导入。公开来源不会自动提供账号权限。微信/购物/交易等当前未接通的账号能力明确标注，角色本机记录不会冒充真实平台结果。完整列表及官方来源见 [连接核实](docs/real-connections.md)。
+
+`ui.openExternal` 需宿主0.2.39、`external.open`权限和每次确认，交由系统浏览器或关联软件处理。系统接受打开不表示登录、发送、付款、下单或播放已完成。浏览器预览使用模拟SDK；Android真实宿主和公开服务的验收另行记录。
+
 ## 功能
 
 - 21 个应用、42 个可读写集合，兼容 `character_phone_core.character_phone_*` 的31个工具名称与主要参数结构。完整字段仍可在记录详情及编辑表单查看。
@@ -17,6 +27,8 @@
 - 购物车合计、视频及阅读进度、聊天五种消息类型与群成员、社交动态及评论收藏、航班与配送状态、菜谱食材及步骤、账本日分组和分类统计。
 - 音乐通过用户自选网易云兼容服务搜索、选歌、前台播放、暂停、上一首/下一首及续播。生图通过用户自选兼容 `/images/generations` 的服务，预览后再采用。
 - schema1 原版 `phone.json` / `phone.json.bak` 的显式导入；导出记录及本机图片备份；原版 `/api/media/` 图片通过同名文件迁入。其他环境中的 Cookie、密钥和图片文件不会自动搬运。
+
+角色前台聊天另可调用三个已接入的真实服务工具：`phone_search_books(keywords)`查询公开书目；`phone_read_feed(source)`读取当前角色在浏览器或播客中配置的订阅；`phone_open_software(app,query?)`请求系统打开指定软件/网页。查询回执进入下一轮角色推理，不会自动当作角色亲历或自动写入收藏；保存仍由相应手机工具完成。平台链接与订阅地址不作为模型凭据，工具不接受任意HTTP请求头或账号参数。
 
 ## 角色与聊天
 
@@ -28,7 +40,7 @@
 
 ## 权限与外联
 
-申请 `storage`、`files`、`secrets`、`network`、`network.local`、`ai.generate`、`chat.read`、`chat.write`。网络域为 `*`，供用户设置音乐、生图和记录图片地址。全部请求经过宿主代理，没有原始 fetch、WebSocket 或远程媒体直连；不向插件提供账号令牌、模型密钥或管理员接口。
+申请 `external.open`、`storage`、`files`、`secrets`、`network`、`network.local`、`ai.generate`、`chat.read`、`chat.write`。网络域为 `*`，供用户设置音乐、生图和记录图片地址。全部请求经过宿主代理，没有原始 fetch、WebSocket 或远程媒体直连；不向插件提供账号令牌、模型密钥或管理员接口。
 
 Cookie 与生图 Key 保存在插件独立 secrets 空间。空值保留，切换服务地址清除旧凭据。音乐支持公共 HTTPS 后端，或用户显式设置的字面 `http://127.0.0.1:端口` / `http://localhost:端口`；HTTP 音频仅允许与该音乐后端同一 origin，不能借此访问其他主机或端口。实际请求仍由宿主检查 `network.local`。生图服务和远程图片仅允许公共 HTTPS。模拟聊天、购物、位置、航班和转账仅为手机内记录，不操作真实平台。
 
@@ -45,8 +57,8 @@ Cookie 与生图 Key 保存在插件独立 secrets 空间。空值保留，切�
 
 ```sh
 node --test tests/*.test.mjs
-python tools/build_web_plugin.py src --output /your/output/pocket-phone-1.2.0.skivu.json
-python tools/build_web_plugin.py --check /your/output/pocket-phone-1.2.0.skivu.json
+python tools/build_web_plugin.py src --output /your/output/pocket-phone-1.3.0.skivu.json
+python tools/build_web_plugin.py --check /your/output/pocket-phone-1.3.0.skivu.json
 ```
 
 `tests/browser.cjs` 使用 `playwright-core` 与 Chromium，检查真实页面和模拟 SDK。默认使用已安装的 playwright-core 和 Chromium；可用 `PHONE_PLAYWRIGHT_PACKAGE` 指定提供 playwright-core 的 package.json、`PHONE_CHROME_PATH` 指定浏览器、`PHONE_QA_OUTPUT` 指定检查输出目录。模拟 SDK 和合成数据仅用于测试，不进入生产插件包。模拟模型测试、真实 Android 宿主测试和真实外部服务验收分别记录；不以 mock 测试代替真实账号或付费调用测试。

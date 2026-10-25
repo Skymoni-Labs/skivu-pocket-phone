@@ -3,10 +3,10 @@
   "apiVersion": "1.0",
   "id": "org.skivu.pocket-phone",
   "name": "角色小手机",
-  "version": "1.2.0",
-  "minHostVersion": "0.2.38",
+  "version": "1.3.0",
+  "minHostVersion": "0.2.39",
   "author": "Skivu contributors",
-  "description": "独立小手机：21 个生活应用，按角色保存记录，支持原版存档导入、结构化角色任务、用户自选的音乐与生图服务。",
+  "description": "角色自己的小手机：连贯生活近况、角色聊天与存档，真实音乐、书目、RSS 和系统软件链接。",
   "license": "GPL-3.0-only",
   "source": "https://github.com/skyjjgw/skivu-pocket-phone",
   "entry": "index.html",
@@ -18,7 +18,8 @@
     "network.local",
     "ai.generate",
     "chat.read",
-    "chat.write"
+    "chat.write",
+    "external.open"
   ],
   "networkDomains": [
     "*"

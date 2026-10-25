@@ -77,7 +77,7 @@ function safeUrl(value, { base = false, allowLocalMusic = false } = {}) {
   return base ? url.href.replace(/\/+$/, '') : url.href;
 }
 
-function publicUrl(value) {
+export function publicUrl(value) {
   try { return safeUrl(value); } catch { return ''; }
 }
 
