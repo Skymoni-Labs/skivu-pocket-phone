@@ -3,7 +3,7 @@ export const MAX_HOST_BYTES = 8 * 1024 * 1024;
 const encoder = new TextEncoder();
 const safeCodes = new Set(['CLOSED', 'NOT_FOUND', 'BUSY', 'TIMEOUT',
   'PERMISSION_DENIED', 'PERMISSION_REQUIRED', 'CANCELLED', 'USER_CANCELLED',
-  'LIMIT_EXCEEDED', 'INVALID_ARGUMENT', 'NETWORK_DENIED', 'model_not_available']);
+  'LIMIT_EXCEEDED', 'INVALID_ARGUMENT', 'NETWORK_DENIED', 'REVISION_CONFLICT', 'model_not_available']);
 
 export class PocketPhoneHostError extends Error {
   constructor(code, message, { status } = {}) {
@@ -92,7 +92,7 @@ export class PocketPhoneHost {
     if (!sdk || typeof sdk.call !== 'function' || typeof sdk.on !== 'function') {
       fail('请从支持开放插件 SDK 1.0 的 Skivu 中打开。', 'SDK_UNAVAILABLE');
     }
-    this.sdk = sdk;
+    this.sdk = sdk; this.observedStorage=new Map(); this.methods=[];
   }
   async _call(method, params = {}) {
     try { return await this.sdk.call(method, params); }
@@ -111,7 +111,7 @@ export class PocketPhoneHost {
       throw new PocketPhoneHostError(code, message);
     }
   }
-  async info() { return this._call('host.info'); }
+  async info() { const value=await this._call('host.info');this.methods=Array.isArray(value.methods)?value.methods:[];return value; }
   async openExternal(url) {
     text(url,8192,'外部链接');
     const value=await this._call('ui.openExternal',{url});
@@ -122,7 +122,8 @@ export class PocketPhoneHost {
     const value = await this._call('context.get');
     if (!object(value)) fail('宿主上下文格式不正确。', 'INVALID_RESPONSE');
     return { roleId: value.roleId ?? null, roleName: value.roleName ?? '',
-      chatId: value.chatId ?? null, action: value.action ?? null };
+      chatId: value.chatId ?? null, action: value.action ?? null,
+      ...(Object.hasOwn(value,'storageScope')?{storageScope:value.storageScope,spaceId:value.spaceId,roleBound:value.roleBound===true,chatToolsEnabled:value.chatToolsEnabled===true}:{}),...(object(value.payload)?{payload:value.payload}:{}),...(typeof value.callId==='string'?{callId:value.callId}:{}) };
   }
   async characters(roleId) {
     return roleId === undefined ? this._call('characters.list')
@@ -131,13 +132,16 @@ export class PocketPhoneHost {
   subscribeContext(fn) { return this.sdk.on('context.changed', fn); }
   onPause(fn) { return this.sdk.on('host.pause', fn); }
   onSuspend(fn) { return this.sdk.on('host.suspend', fn); }
-  async storageGet(name) { return this._call('storage.get', { key: key(name) }); }
+  onStorageChange(fn) { return this.sdk.on('storage.changed', fn); }
+  async storageGet(name) { const value=await this._call('storage.get', { key: key(name) });this.observedStorage.set(name,structuredClone(value));return value; }
   async storageSet(name, value) {
     let raw;
     try { raw = JSON.stringify(value); } catch { fail('存档必须是有效 JSON。'); }
     if (raw === undefined || encoder.encode(raw).length > 10 * 1024 * 1024) fail('单个存档超过限制。', 'LIMIT_EXCEEDED');
-    const saved = await this._call('storage.set', { key: key(name), value });
+    if(this.methods.includes('storage.compareAndSet')&&!this.observedStorage.has(name))await this.storageGet(name);
+    const saved = await this._call(this.methods.includes('storage.compareAndSet')?'storage.compareAndSet':'storage.set', { key: key(name), value,...(this.methods.includes('storage.compareAndSet')?{expected:this.observedStorage.get(name)}:{}) });
     if (saved !== true) fail('宿主未确认存档保存。', 'INVALID_RESPONSE');
+    this.observedStorage.set(name,structuredClone(value));
     return true;
   }
   async storageRemove(name) { return this._call('storage.remove', { key: key(name) }); }

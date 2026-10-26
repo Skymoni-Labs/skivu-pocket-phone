@@ -71,7 +71,7 @@ export class ExternalServices {
     const cached=this.cache.get(url);if(cached&&Date.now()-cached.at<300000)return structuredClone(cached.value);
     if(this.busy||Date.now()-this.lastRequest<1100)fail('rate_limit','请稍后再查询。');
     this.busy=true;this.lastRequest=Date.now();
-    try{const r=await this.host.request({url,headers:{'User-Agent':'SkivuPocketPhone/1.3.0 (+https://github.com/skyjjgw/skivu-pocket-phone)'},responseType:'text',maxBytes:1024*1024});if(r.status!==200)fail('external_http','外部服务暂不可用，请稍后重试。');if(typeof r.body!=='string'||new TextEncoder().encode(r.body).length>1024*1024)fail('invalid_response','外部服务返回内容无效或过大。');this.cache.set(url,{at:Date.now(),value:r.body});if(this.cache.size>30)this.cache.delete(this.cache.keys().next().value);return r.body;}finally{this.busy=false;}
+    try{const r=await this.host.request({url,headers:{'User-Agent':'SkivuPocketPhone/1.4.0 (+https://github.com/skyjjgw/skivu-pocket-phone)'},responseType:'text',maxBytes:1024*1024});if(r.status!==200)fail('external_http','外部服务暂不可用，请稍后重试。');if(typeof r.body!=='string'||new TextEncoder().encode(r.body).length>1024*1024)fail('invalid_response','外部服务返回内容无效或过大。');this.cache.set(url,{at:Date.now(),value:r.body});if(this.cache.size>30)this.cache.delete(this.cache.keys().next().value);return r.body;}finally{this.busy=false;}
   }
   async feed(raw){const url=externalUrl(raw);return{source:url,items:parseFeed(await this.request(url),url)};}
   async books(query){

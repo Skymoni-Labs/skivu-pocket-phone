@@ -186,6 +186,7 @@ export class PocketPhoneStore {
     this._loaded = true; this.error = null;
   }
   restore() { return this._serial(async () => { await this._load(); return this; }); }
+  reload() { return this._serial(async()=>{const previous=this._archive;this._loaded=false;this._archive=emptyArchive();this._persistedText=null;try{await this._load();}catch(error){this._archive=previous;this._loaded=false;throw error;}return this;}); }
   snapshot(id) { roleId(id); return clone(own(this._archive.roles, id) ? this._archive.roles[id] : seed()); }
   exportArchive(id) {
     const phone = this.snapshot(id);
@@ -353,7 +354,8 @@ function validateTint(value) {
 function validateRecord(path, record, {importing = false} = {}) {
   if (!own(phoneCollections, path)) fail('未知集合路径');
   const spec = phoneCollections[path]; object(record, 'record'); clean(record);
-  knownKeys(record, [...spec.fields, 'id', 'created_at', 'updated_at', ...(path === 'ledger.entries' ? ['amount_cents'] : []), ...(path === 'wechat.chats' ? ['messages'] : [])], path);
+  knownKeys(record, [...spec.fields, 'id', 'created_at', 'updated_at', 'provenance', ...(path === 'ledger.entries' ? ['amount_cents'] : []), ...(path === 'wechat.chats' ? ['messages'] : [])], path);
+  if(record.provenance!=null){object(record.provenance,'provenance');knownKeys(record.provenance,['kind','chatId','callId','time'],'provenance');if(!['conversation','role_story'].includes(record.provenance.kind))fail('记录来源无效');for(const key of ['chatId','callId','time']){textField(record.provenance[key],key);if(record.provenance[key].length>500)fail('记录来源字段过长');}}
   if (own(record, 'id')) identifier(record.id);
   for (const key of spec.requiredFields) {
     if (key === 'from' || key === 'to') {

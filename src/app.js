@@ -7,10 +7,11 @@ import {PocketPhoneServices} from './services.js';
 import {appNames,appCaptions,collectionView,recordStory,ownerText,recordHeading} from './views.js';
 import {PocketPhoneConversation} from './conversation.js';
 import {collectionOptions,selectRecords,cartSummary,ledgerSummary as summarizeLedger} from './view-state.js';
-import {ScopedPocketPhoneStore} from './scoped-store.js';
+import {ScopedPocketPhoneStore,SHARED_POCKET_PHONE_ROLE_ID} from './scoped-store.js';
 import {uiIcon,appColors} from './icons.js';
 import {RoleLife,lifeFeed} from './role-life.js';
 import {ExternalServices,RoleSoftwareTools,softwareConnections,externalUrl,feedStorageKey} from './external-services.js';
+import {phoneContextScope,COMPANION_HISTORY,undoCompanionChange} from './phone-companion.js';
 
 const $=id=>document.getElementById(id);
 function el(tag,attrs={},...children){const node=document.createElement(tag);for(const [key,value]of Object.entries(attrs)){
@@ -111,10 +112,11 @@ function chooseAlbum(accept){const c=capture(),d=dialog('从相册或本机图�
 function render(){
   $('phone').dataset.view=viewMode==='conversation'?'conversation':moduleId||viewMode==='life'?'app':'home';
   if(!moduleId||viewMode==='conversation')delete $('screen').dataset.module;
-  $('owner').textContent=ctx.roleName?`${ctx.roleName}的小手机`:'角色小手机';$('role-label').textContent=viewMode==='conversation'?'真实角色对话 · 手机工具联动':phoneScope==='shared'?'共享机主 · 所有角色共用这部手机':'按角色保存 · 记录一份日常';$('back').hidden=!moduleId&&viewMode==='phone';
+  $('owner').textContent=ctx.roleName?`${ctx.roleName}的小手机`:'角色小手机';$('role-label').textContent=viewMode==='conversation'?'真实角色对话 · 手机工具联动':phoneScope==='shared'?'旧版共享手机':phoneScope.startsWith('story:')?'这段故事里的 TA · 独立保存':'角色自己的手机 · 跨故事沿用';$('back').hidden=!moduleId&&viewMode==='phone';
   $('back').replaceChildren(uiIcon('arrowLeft'));$('settings').replaceChildren(uiIcon('settings'));
-  $('role-task').disabled=!ctx.roleId;$('role-task').replaceChildren(uiIcon(actions.busy?'stop':'sparkle'));
+  $('role-task').disabled=!ctx.roleId||(!ctx.roleBound&&hostMethods.includes('ui.roleSettings'));$('role-task').replaceChildren(uiIcon(actions.busy?'stop':'sparkle'));
   if(!ctx.roleId){$('screen').replaceChildren(el('div',{class:'empty'},el('h1',{text:'先选择一位角色'}),el('p',{text:'回到 Skivu 选择角色，再打开这部小手机。'})));return;}
+  if(!ctx.roleBound&&hostMethods.includes('ui.roleSettings')){$('screen').replaceChildren(el('div',{class:'empty'},el('h1',{text:`让${ctx.roleName||'TA'}拥有自己的手机`}),el('p',{text:'先为这个角色绑定。可以仅手动使用，也可以允许 TA 在正常聊天中记事和查阅；手机不会替换聊天界面。'}),button('为这个角色设置手机',()=>host.sdk.call('ui.roleSettings',{}),'primary')));return;}
   $('screen').classList.toggle('home-screen',!moduleId&&viewMode==='phone');$('screen').classList.toggle('conversation-screen',viewMode==='conversation');
   $('conversation').setAttribute('aria-label',viewMode==='conversation'?'打开小手机':'角色对话');$('conversation').replaceChildren(uiIcon(viewMode==='conversation'?'calendar':'wechat'));
   if(viewMode==='conversation')renderConversation();else if(viewMode==='life')renderLife();else if(!moduleId)renderHome();else renderApp();
@@ -183,7 +185,7 @@ function detailField(key,value){if(value==null||value==='')return null;if(pictur
   let text=typeof value==='boolean'?(value?'是':'否'):typeof value==='object'?Array.isArray(value)?value.map(v=>typeof v==='object'?Object.entries(v).map(([k,x])=>`${labels[k]||k}：${x}`).join(' · '):String(v)).join('\n'):Object.entries(value).map(([k,v])=>`${labels[k]||k}：${v}`).join('\n'):String(value);
   return el('dl',{class:'detail-field'},el('dt',{text:labels[key]||key}),el('dd',{text}));}
 async function toggleFavorite(spec,row){const c=capture();await phone.invoke('upsert',{path:spec.key,record:{id:row.id,favorite:!row.favorite},expected_revision:snapshot().revision},{...c,mayCommit:()=>valid(c)});row.favorite=!row.favorite;return row.favorite;}
-function recordDetail(spec,row){const d=dialog(title(row));d.content.append(recordStory({moduleId:spec.module,row,state:snapshot(),el,picture,button,toggleFavorite:spec.fields.includes('favorite')?item=>job(()=>toggleFavorite(spec,item)):null}));
+function recordDetail(spec,row){const d=dialog(title(row));if(row.provenance)d.content.append(el('p',{class:'field-hint',text:row.provenance.kind==='role_story'?'来源：角色剧情补充':'来源：角色聊天中的手机操作'}));d.content.append(recordStory({moduleId:spec.module,row,state:snapshot(),el,picture,button,toggleFavorite:spec.fields.includes('favorite')?item=>job(()=>toggleFavorite(spec,item)):null}));
   if(spec.module!=='pornhub')d.footer.append(button('聊聊这件事',()=>{d.close();askAboutRecord(spec.key,row);}));
   if(spec.fields.includes('progress')){const c=capture(),range=inputField(d.content,'reading-progress','阅读 / 收听进度',Number(row.progress||0),{type:'range',min:0,max:1,step:.01}),value=el('small',{text:`${Math.round(Number(row.progress||0)*100)}%`});range.oninput=()=>{value.textContent=`${Math.round(Number(range.value)*100)}%`;};d.content.append(value,button('保存进度',()=>job(async()=>{check(c);await phone.invoke('upsert',{path:spec.key,record:{id:row.id,progress:Number(range.value)},expected_revision:snapshot().revision},{...c,mayCommit:()=>valid(c)});toast('进度已保存');})));}
   if(spec.fields.includes('comments'))socialActions(d,spec,row);
@@ -270,11 +272,15 @@ function socialActions(d,spec,initial){const c=capture(),section=el('section',{c
 }
 
 function settings(){const d=dialog('小手机设置'),list=el('div',{class:'settings-buttons'});
+  if(ctx.roleBound)list.append(button('聊天更新记录与撤销',()=>{d.close();companionHistory();}));
+  if(ctx.roleBound)list.append(button('查看旧版共享手机',()=>{d.close();legacySharedPhone();}));
   for(const [label,fn]of [['软件与服务连接',softwareCenter],['机主与壁纸',profileEditor],['手机存储模式',scopeSettings],['连接网易云',()=>connection(false)],['配置生图服务',()=>connection(true)],['导出手机备份',exportBackup],['单独导出记录与图片',exportSeparate],['导入原版或 Skivu 存档',importBackup],['导入原版图片文件',importMedia],['恢复上一份备份',recover],['关于与来源',about]])list.append(button(label,()=>{d.close();fn();}));d.content.append(list);}
-function scopeSettings(){const c=capture(),d=dialog('手机存储模式'),select=el('select',{name:'phone-scope'},el('option',{value:'role',text:'按角色分别保存',selected:phoneScope==='role'}),el('option',{value:'shared',text:'原版共享机主：所有角色共用一部手机',selected:phoneScope==='shared'})),copy=el('input',{type:'checkbox',name:'copy-phone',checked:false});
+function scopeSettings(){if(ctx.roleBound&&hostMethods.includes('ui.roleSettings')){host.sdk.call('ui.roleSettings',{});return;}const c=capture(),d=dialog('手机存储模式'),select=el('select',{name:'phone-scope'},el('option',{value:'role',text:'按角色分别保存',selected:phoneScope==='role'}),el('option',{value:'shared',text:'原版共享机主：所有角色共用一部手机',selected:phoneScope==='shared'})),copy=el('input',{type:'checkbox',name:'copy-phone',checked:false});
   d.content.append(select,el('p',{text:'切换模式会保留各空间已有记录，不会自动合并。共享机主模式下，所有角色看到并修改同一部手机。'}),el('label',{class:'check'},copy,'把当前手机复制到目标空间（覆盖目标手机）'));
   d.footer.append(button('取消',d.close),button('应用',()=>job(async()=>{check(c);const target=select.value;if(target===phoneScope){d.close();return;}const contents=copy.checked?phone.exportArchive(c.roleId):null;if(contents&&!await confirm('覆盖目标空间的手机？','当前手机会复制到目标空间，目标空间旧记录由事务备份保留；其他空间保持不变。'))return;check(c);await host.storageSet('pocket-phone.preferences.v1',{mode:target});const sameRole=ctx.roleId===c.roleId;stopContext();phoneScope=target;moduleId=null;render();if(contents&&sameRole){const next=capture();await phone.importArchive(next.roleId,contents,{mayCommit:()=>valid(next)});}toast(contents&&!sameRole?'存储模式已切换；角色已变化，未复制记录。':'存储模式已切换');}),'primary'));
 }
+function legacySharedPhone(){const c=capture(),d=dialog('旧版共享手机');job(async()=>{try{const legacy=new PocketPhoneStore({storage:{get:key=>host.storageGet(key),set:(key,value)=>host.storageSet(key,value)}});await legacy.restore();check(c);const raw=await host.storageGet('pocket-phone.archive.v1'),archive=typeof raw==='string'?JSON.parse(raw):raw;if(!archive?.roles?.[SHARED_POCKET_PHONE_ROLE_ID]){d.content.append(el('p',{text:'没有检测到旧版共享机主存档。各角色的旧手机仍可在角色设置选择“同角色共用”查看。'}));return;}const text=legacy.exportArchive(SHARED_POCKET_PHONE_ROLE_ID),state=JSON.parse(text);d.content.append(el('p',{text:'旧共享手机保留在独立空间。你可以查看、导出，或确认后复制到当前手机；不会自动混入角色的新故事。'}));for(const [path,spec]of Object.entries(phoneCollections)){const items=at(state,path);if(Array.isArray(items)&&items.length)d.content.append(el('h3',{text:`${spec.title} · ${items.length}`}),items.slice(0,5).map(row=>el('p',{text:title(row)})));}d.footer.prepend(button('导出旧共享记录',()=>job(()=>host.saveFile({name:'legacy-shared-phone.json',mime:'application/json',bytes:new TextEncoder().encode(text)}))),button('复制到当前手机',()=>job(async()=>{if(!await confirm('用旧共享记录替换当前手机？','当前手机先保留上一份备份。旧共享存档和其他角色、故事不会删除。'))return;check(c);await phone.importArchive(c.roleId,text,{mayCommit:()=>valid(c)});check(c);d.close();toast('已复制到当前手机');})));}catch(e){d.fail(e);}});d.footer.append(button('关闭',d.close));}
+function companionHistory(){const c=capture(),d=dialog('聊天更新记录');job(async()=>{const history=await host.storageGet(COMPANION_HISTORY)||[];check(c);const entries=history.filter(e=>e.roleId===c.roleId&&e.scope===phoneContextScope(ctx)).reverse();if(!entries.length)d.content.append(el('p',{text:'还没有随聊保存的手机记录。'}));for(const entry of entries){const box=el('section',{class:'life-card'},el('strong',{text:entry.after?title(entry.after):'待核对的更新'}),el('p',{text:phoneCollections[entry.collection]?.title||entry.collection}),button('撤销这次手机修改',()=>job(async()=>{check(c);await undoCompanionChange({phone,host,context:ctx,entry,mayCommit:()=>valid(c)});check(c);d.close();toast('已撤销这次手机修改');})));d.content.append(box);}});d.footer.append(button('关闭',d.close));}
 function connection(image){const c=capture(),config=image?services.publicImageConfig():services.publicMusicConfig(),d=dialog(image?'生图服务':'网易云连接'),fields={};
   fields.baseUrl=inputField(d.content,'baseUrl',image?'HTTPS 服务地址':'HTTPS 或本机 HTTP 服务地址',config.baseUrl||'');if(image){fields.model=inputField(d.content,'model','模型',config.model||'');fields.size=inputField(d.content,'size','默认尺寸',config.size||'1024x1024');fields.style=inputField(d.content,'style','默认画风',config.style||'');}
   const credential=inputField(d.content,'credential',image?'API 密钥':'Cookie（可选）','',{type:'password',autocomplete:'off'});
@@ -324,7 +330,7 @@ async function importMedia(){const c=capture();await job(async()=>{const file=aw
     await phone.importArchive(c.roleId,JSON.stringify(replace(state)),{mayCommit:()=>{check(c);if(phone.snapshot(c.roleId).revision!==state.revision)throw new Error('手机已有新记录，本次未覆盖。请重新选择图片进行关联。');return true;}});toast('原版图片已关联');}
 });}
 async function recover(){if(await confirm('恢复上一份插件备份？','会恢复所有角色的小手机记录。建议先导出需要保留的最新记录。'))await job(async()=>{await phone.recoverBackup();problem(null);toast('已恢复上一份备份');});}
-function about(){const d=dialog('关于角色小手机');d.content.append(el('p',{text:'Skivu 独立插件 1.3.0。参考 TA 的小手机 1.5.2 的功能规格，界面、存档与 SDK 适配独立实现。'}),el('p',{text:'原作者：LilyWithZYoutfear。原包未声明整体代码复用许可，本包未搬入其界面与业务代码。晨昏使用保留 BSD-2-Clause 许可的 SunCalc 1.9.0。'}),el('p',{text:'手机记录保存在本插件空间，可选择按角色分开或共用一部手机。音乐、生图使用你提供的服务与凭据，实际外联均经宿主代理；不会读取 App 的模型密钥或账号令牌。'}));d.footer.append(button('关闭',d.close));}
+function about(){const d=dialog('关于角色小手机');d.content.append(el('p',{text:'Skivu 独立插件 1.4.0。参考 TA 的小手机 1.5.2 的功能规格，界面、存档与 SDK 适配独立实现。'}),el('p',{text:'原作者：LilyWithZYoutfear。原包未声明整体代码复用许可，本包未搬入其界面与业务代码。晨昏使用保留 BSD-2-Clause 许可的 SunCalc 1.9.0。'}),el('p',{text:'手机记录保存在本插件空间，可由角色设置选择各故事独立或同角色沿用。旧版共享记录可单独查看和迁入。音乐、生图使用你提供的服务与凭据，实际外联均经宿主代理；不会读取 App 的模型密钥或账号令牌。'}));d.footer.append(button('关闭',d.close));}
 
 function softwareCenter(){const d=dialog('软件与服务连接');d.content.append(el('p',{text:'这部手机属于当前角色。下面逐项列出可用连接：真实平台的数据、系统打开结果与角色本机记录分别展示。'}));
   for(const item of softwareConnections){const b=button('',()=>{d.close();softwareConnection(item.id);},'software-item');b.append(uiIcon(item.id),el('div',{},el('strong',{text:appNames[item.id]}),el('small',{text:({local:'本机角色记录',external:'官方网页 · 账号未连接',music:'真实音乐 · 自选服务',books:'真实书目搜索',map:'真实地图网页',feed:'真实订阅读取'})[item.mode]})),uiIcon('arrowRight'));d.content.append(b);}d.footer.append(button('关闭',d.close));}
@@ -358,6 +364,7 @@ function askAboutRecord(recordPath,row){
   if(!ctx.chatId){toast('请先在 Skivu 选择一条已有的角色聊天。');return;}
   const body=String(row.content||row.text||row.note||row.caption||row.artist||row.address||'').slice(0,1000);
   conversationDraft=`我看到了你的小手机里「${phoneCollections[recordPath].title}」的一条记录：${title(row)}${body?'\n'+body:''}\n想听你讲讲这件事。`;
+  if(hostMethods.includes('ui.chatDraft')){job(()=>host.sdk.call('ui.chatDraft',{text:conversationDraft}));return;}
   openConversation();
 }
 function draftRoleLife(){
@@ -377,7 +384,7 @@ function collectRoleWords(){const c=capture(),d=dialog('收下 TA 说过的话')
   }catch(e){d.fail(e);}});d.footer.append(button('关闭',d.close));}
 
 async function reloadConversation(){const c=capture();return job(async()=>{const messages=await conversation.history({limit:60});check(c);conversationMessages=messages;if(viewMode==='conversation')render();});}
-function openConversation(){if(!ctx.chatId){toast('请先在 Skivu 选择一条已有的角色聊天。');return;}viewMode='conversation';moduleId=null;render();reloadConversation();}
+function openConversation(){if(!ctx.chatId){toast('请先在 Skivu 选择一条已有的角色聊天。');return;}if(hostMethods.includes('ui.chatDraft')){job(()=>host.sdk.call('ui.chatDraft',{text:conversationDraft}));return;}viewMode='conversation';moduleId=null;render();reloadConversation();}
 function renderConversation(){
   $('screen').style.backgroundImage='';$('screen').classList.remove('home-screen');
   const page=el('section',{class:'conversation-page','aria-label':'真实角色对话'}),head=el('div',{class:'conversation-toolbar'},el('strong',{text:ctx.roleName||'角色对话'}),button('刷新记录',reloadConversation),button('打开小手机',()=>{viewMode='phone';moduleId=null;render();}));
@@ -410,12 +417,15 @@ phone.subscribe(()=>{const current=snapshot().music?.nowPlaying,songId=String(cu
   if(audio&&songId===audioTrack){if(changedPlaying&&current.playing===false&&!audio.paused)audio.pause();else if(changedPlaying&&current.playing===true&&audio.paused)audio.play().catch(()=>{});if(changedPosition&&audio.readyState>0&&Number.isFinite(current.position)&&Math.abs(current.position-audio.currentTime)>1.5)audio.currentTime=current.position;}
   if(!document.querySelector('dialog[open]'))render();else if($('records'))fillRecords();
   if(current?.playing&&songId&&audioTrack!==songId&&!loadingMusicId&&musicSources.has(songId)){const c=capture(),request=++musicRequest;loadingMusicId=songId;job(async()=>{try{await loadMusic(musicSources.get(songId),songId,c,request);}finally{if(request===musicRequest)loadingMusicId=null;}});}});
-actions.subscribe(()=>{$('role-task').disabled=!ctx.roleId;$('role-task').replaceChildren(uiIcon(actions.busy?'stop':'sparkle'));});
+actions.subscribe(()=>{$('role-task').disabled=!ctx.roleId||(!ctx.roleBound&&hostMethods.includes('ui.roleSettings'));$('role-task').replaceChildren(uiIcon(actions.busy?'stop':'sparkle'));});
 conversation.subscribe(()=>{if(viewMode==='conversation'&&!suspended&&!document.querySelector('dialog[open]'))render();});
 host.subscribeContext(async detail=>{const request=++contextRequest;const announced=detail&&typeof detail==='object'&&Object.hasOwn(detail,'roleId')&&Object.hasOwn(detail,'chatId');
   if(announced&&(detail.roleId!==ctx.roleId||detail.chatId!==ctx.chatId)){stopContext();ctx={...ctx,...detail};moduleId=null;}
-  try{const next=await host.context();if(request!==contextRequest||suspended)return;const changed=next.roleId!==ctx.roleId||next.chatId!==ctx.chatId;if(changed){stopContext();moduleId=null;}ctx=next;render();if(viewMode==='conversation'&&ctx.chatId)reloadConversation();}catch{if(request===contextRequest&&!suspended)problem('角色上下文暂不可用，请重新打开小手机。');}});
+  try{const next=await host.context();if(request!==contextRequest||suspended)return;const changed=next.roleId!==ctx.roleId||next.chatId!==ctx.chatId||next.spaceId!==ctx.spaceId||next.storageScope!==ctx.storageScope||next.roleBound!==ctx.roleBound;if(changed){stopContext();moduleId=null;}ctx=next;if(ctx.roleBound)phoneScope=phoneContextScope(ctx);render();if(viewMode==='conversation'&&ctx.chatId)reloadConversation();}catch{if(request===contextRequest&&!suspended)problem('角色上下文暂不可用，请重新打开小手机。');}});
 host.onSuspend(()=>{suspended=true;stopContext();});
+let storageRefreshTimer;
+function refreshStoredPhone(){clearTimeout(storageRefreshTimer);storageRefreshTimer=setTimeout(async()=>{if(suspended||!ctx.roleId)return;if(working||phone.busy||actions.busy||conversation.busy||roleLife.busy){refreshStoredPhone();return;}const c=capture(),before=snapshot().revision;try{await phone.reload();check(c);if(document.querySelector('dialog[open]')&&before!==snapshot().revision)toast('手机记录有更新；正在编辑的内容保留，保存时会核对版本。');}catch(error){if(valid(c))problem(error.message||'手机更新暂不可用，请重新打开核对。');}},120);}
+host.onStorageChange(refreshStoredPhone);
 setInterval(()=>{if(viewMode==='phone'&&!moduleId&&!document.querySelector('dialog[open]')&&!suspended)render();},60000);
-try{const capabilities=await host.info();hostMethods=Array.isArray(capabilities.methods)?capabilities.methods:[];ctx=await host.context();const preferences=await host.storageGet('pocket-phone.preferences.v1');phoneScope=preferences?.mode==='shared'?'shared':'role';await phone.restore();try{await conversation.restore();}catch(e){conversationProblem=e.message||'对话任务日志暂不可用';toast('对话任务日志暂不可用，手机记录仍可使用。');}try{await services.restore();}catch{toast('音乐或生图连接暂未读入，可在设置中重新配置。');}render();if(ctx.action==='update-phone')roleTask();if(ctx.action==='chat-phone')openConversation();}
+try{const capabilities=await host.info();hostMethods=Array.isArray(capabilities.methods)?capabilities.methods:[];ctx=await host.context();const preferences=await host.storageGet('pocket-phone.preferences.v1');phoneScope=ctx.roleBound?phoneContextScope(ctx):preferences?.mode==='shared'?'shared':'role';await phone.restore();try{await conversation.restore();}catch(e){conversationProblem=e.message||'对话任务日志暂不可用';toast('对话任务日志暂不可用，手机记录仍可使用。');}try{await services.restore();}catch{toast('音乐或生图连接暂未读入，可在设置中重新配置。');}render();if(ctx.action==='update-phone')roleTask();if(ctx.action==='chat-phone')openConversation();if(ctx.payload?.collection&&phoneCollections[ctx.payload.collection]){const spec=phoneCollections[ctx.payload.collection],row=rows(spec.key).find(r=>r.id===ctx.payload.id);openApp(spec.module,spec.key);if(row)recordDetail(spec,row);}}
 catch(e){problem(e.message||'小手机存档暂不可用。');render();}

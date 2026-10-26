@@ -52,14 +52,14 @@ export class ScopedPocketPhoneStore {
     };
   }
 
-  get scopeKey() { return this._getMode() === 'shared' ? 'shared' : 'role'; }
+  get scopeKey() { const mode=this._getMode();return mode==='shared'?'shared':typeof mode==='string'&&/^story:[a-f0-9]{64}$/.test(mode)?mode:'role'; }
   get error() { return this._delegate.error; }
   set error(value) { this._delegate.error = value; }
   get busy() { return this._delegate.busy; }
   get musicHandler() { return this._delegate.musicHandler; }
   set musicHandler(handler) { this._delegate.musicHandler = handler; }
 
-  _id(id, mode) { return mode === 'shared' ? SHARED_POCKET_PHONE_ROLE_ID : id; }
+  _id(id, mode) { return mode === 'shared' ? SHARED_POCKET_PHONE_ROLE_ID : mode.startsWith('story:')?'story_'+mode.slice(6):id; }
   _guard(mode, mayCommit) {
     if (mayCommit !== undefined && typeof mayCommit !== 'function') throw new PocketPhoneError('invalid_arguments', 'mayCommit必须是函数');
     return () => {
@@ -83,6 +83,7 @@ export class ScopedPocketPhoneStore {
   }
 
   async restore() { await this._delegate.restore(); return this; }
+  async reload() { await this._delegate.reload(); return this; }
   subscribe(listener) { return this._delegate.subscribe(listener); }
   snapshot(roleId) { const mode = this.scopeKey; return this._delegate.snapshot(this._id(roleId, mode)); }
   exportArchive(roleId) { const mode = this.scopeKey; return this._delegate.exportArchive(this._id(roleId, mode)); }
