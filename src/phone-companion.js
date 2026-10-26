@@ -24,9 +24,11 @@ export class PhoneCompanion {
       const spec=phoneCollections[args.collection];if(!spec||spec.singleton||spec.module==='pornhub')throw new Error('这个集合不允许随聊写入。');
       const beforeState=this.phone.snapshot(c.roleId),record=copy(args.record),before=record.id?get(beforeState,args.collection).find(v=>v.id===record.id):null;
       if(record.id&&!before)throw new Error('要修改的记录不存在，请先读取手机。');
+      if(record.id&&(!Number.isSafeInteger(args.expected_revision)||args.expected_revision!==beforeState.revision))throw new Error('这条手机记录已变化，或没有提供读取时的版本。请重新读取后再修改。');
       if(!c.callId)throw new Error('缺少本次工具执行标识。');
       const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(c.callId));
       record.id=record.id||'chat_'+[...new Uint8Array(digest)].map(v=>v.toString(16).padStart(2,'0')).join('').slice(0,32);
+      if(!before&&get(beforeState,args.collection).some(row=>row.id===record.id))throw new Error('这次记录已经存在，请打开手机核对，不会重复写入。');
       record.provenance={kind:args.source==='role_story'?'role_story':'conversation',chatId:c.chatId,callId:c.callId,time:new Date().toISOString()};
       const history=await this.host.storageGet(COMPANION_HISTORY)||[];
       if(!Array.isArray(history))throw new Error('手机更新日志暂不可用。');
